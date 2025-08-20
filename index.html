@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>3D Portfolio — Cybertruck + UI Map</title>
+<style>
+  html,body{height:100%;margin:0;background:#0b0d10;color:#e8f0ff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial}
+  #app{position:fixed;inset:0}
+  .hud{position:fixed;left:12px;top:12px;z-index:10;background:rgba(12,16,22,.55);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.35}
+  .hud b{font-weight:700}
+  .ui-map{position:fixed;right:12px;bottom:12px;z-index:12;display:grid;grid-template-columns:auto;gap:8px}
+  .map-card{background:rgba(12,16,22,.55);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px}
+  .map-title{font-size:12px;opacity:.8;margin-bottom:6px}
+  canvas#minimap{display:block;width:200px;height:200px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#0a0d12}
+  .map-buttons{display:flex;gap:8px}
+  .btn{appearance:none;border:1px solid rgba(255,255,255,.15);background:transparent;border-radius:999px;padding:6px 10px;color:#e8f0ff;font-size:12px;cursor:pointer}
+  .btn:hover{border-color:#4cc9ff}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;background:rgba(12,16,22,.85);border:1px solid rgba(255,255,255,.1);padding:8px 12px;border-radius:999px;font-size:12px;z-index:20;opacity:.9}
+</style>
+
+<!-- Import maps: Three, loaders, and cannon-es -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+    "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div class="hud">
+    <div><b>Drive:</b> WASD / Arrows • <b>Brake:</b> Space • <b>Camera:</b> drag</div>
+    <div>Click a route in the map to auto‑drive. Press any key to cancel.</div>
+  </div>
+
+  <!-- UI Map -->
+  <div class="ui-map">
+    <div class="map-card">
+      <div class="map-title">Map</div>
+      <canvas id="minimap" width="220" height="220"></canvas>
+      <div class="map-buttons">
+        <button class="btn" data-route="portfolio">Portfolio</button>
+        <button class="btn" data-route="info">Info</button>
+        <button class="btn" data-route="contact">Contact</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" style="display:none"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as CANNON from 'cannon-es';
+
+/* ============ 0) Config ============ */
+const CYBERTRUCK_URL = 'YOUR_CYBERTRUCK_MODEL.glb'; // <-- drop a .glb URL or file path here
+const WORLD_RADIUS = 42; // meters
+const WAYPOINT_EPS = 2.2;
+
+const projects = [
+  { key:'portfolio', label:'Portfolio', color:'#5ee1ff', position:new THREE.Vector3( 24,0, 18), url:'https://example.com/portfolio' },
+  { key:'info',      label:'Info',      color:'#ffd166', position:new THREE.Vector3(-26,0,-10), url:'https://example.com/info' },
+  { key:'contact',   label:'Contact',   color:'#a0ff8f', position:new THREE.Vector3(  6,0,-28), url:'https://example.com/contact' },
+];
+
+/* ============ 1) Three.js Scene ============ */
+const container = document.getElementById('app');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0d10);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 600);
+camera.position.set(0, 6, 14);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+container.appendChild(renderer.domElement);
+
+const hemi = new THREE.HemisphereLight(0xcfe9ff, 0x101319, 0.85);
+scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff, 1.2);
+dir.position.set(12,16,10);
+scene.add(dir);
+
+// Ground disc + ring
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(WORLD_RADIUS, 128),
+  new THREE.MeshStandardMaterial({ color: 0x0f141a, roughness:1 })
+);
+ground.rotation.x = -Math.PI/2;
+scene.add(ground);
+
+scene.add(new THREE.Mesh(
+  new THREE.TorusGeometry(WORLD_RADIUS-1.2, 0.08, 8, 180),
+  new THREE.MeshBasicMaterial({ color: 0x1ea7ff, transparent:true, opacity:.25 })
+)).rotation.x = Math.PI/2;
+
+// Props: project totems
+const projectMeshes = [];
+projects.forEach(p => {
+  const g = new THREE.CylinderGeometry(0.9, 0.9, 2.2, 20);
+  const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(p.color) });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.copy(p.position).setY(1.1);
+  mesh.userData = p;
+  // glow
+  const glow = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.05,1.05,2.25,24),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(p.color), transparent:true, opacity:.12 })
+  );
+  mesh.add(glow);
+  // label
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeLabelTexture(p.label) }));
+  label.position.set(0, 1.8, 0);
+  label.scale.set(2.8, 0.8, 1);
+  mesh.add(label);
+
+  scene.add(mesh);
+  projectMeshes.push(mesh);
+});
+
+function makeLabelTexture(text){
+  const c = document.createElement('canvas'); c.width=512; c.height=128;
+  const x = c.getContext('2d');
+  x.fillStyle='#0f141a'; x.fillRect(0,0,c.width,c.height);
+  x.strokeStyle='#ffffff22'; x.strokeRect(0,0,c.width,c.height);
+  x.fillStyle='#e8f0ff'; x.font='600 40px Inter, Arial'; x.textAlign='center'; x.textBaseline='middle';
+  x.fillText(text, c.width/2, c.height/2);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+
+/* ============ 2) Physics ============ */
+const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
+world.broadphase = new CANNON.SAPBroadphase(world);
+world.allowSleep = true;
+
+const groundBody = new CANNON.Body({ mass:0, shape:new CANNON.Plane(), material:new CANNON.Material({ friction:0.8, restitution:0.05 }) });
+groundBody.quaternion.setFromEuler(-Math.PI/2, 0, 0);
+world.addBody(groundBody);
+
+/* ============ 3) Car: Cybertruck (GLB, black) w/ fallback box ============ */
+const carRoot = new THREE.Group(); scene.add(carRoot);
+const chassisBody = new CANNON.Body({
+  mass: 400,
+  shape: new CANNON.Box(new CANNON.Vec3(1,0.5,2)),
+  position: new CANNON.Vec3(0, 1.2, 0),
+  linearDamping: 0.15, angularDamping: 0.5
+});
+world.addBody(chassisBody);
+
+// try to load cybertruck; fallback to box if it fails
+(async ()=>{
+  try{
+    if (!CYBERTRUCK_URL || CYBERTRUCK_URL.startsWith('YOUR_')) throw new Error('no model set');
+    const gltf = await new GLTFLoader().loadAsync(CYBERTRUCK_URL);
+    const model = gltf.scene;
+    // scale/center and make it black graphite
+    model.scale.setScalar(1.4);
+    model.traverse(o=>{
+      if (o.isMesh) {
+        if (o.material) {
+          o.material = o.material.clone();
+          o.material.color = new THREE.Color(0x0d0f13); // dark
+          o.material.metalness = 0.6;
+          o.material.roughness = 0.35;
+        }
+        o.castShadow = o.receiveShadow = false;
+      }
+    });
+    model.position.y = 0.6;
+    carRoot.add(model);
+  }catch(e){
+    // fallback visual shell
+    const bodyMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(2.2, 0.9, 4.2),
+      new THREE.MeshStandardMaterial({ color: 0x0d0f13, metalness:.5, roughness:.35 })
+    );
+    bodyMesh.position.y = 0.9;
+    carRoot.add(bodyMesh);
+    // wheels (visual)
+    const wheelGeo = new THREE.CylinderGeometry(0.6,0.6,0.4,22); wheelGeo.rotateZ(Math.PI/2);
+    const wheelMat = new THREE.MeshStandardMaterial({ color:0x161b22 });
+    [[ 1.0,0.5, 1.5],[-1.0,0.5, 1.5],[ 1.0,0.5,-1.5],[-1.0,0.5,-1.5]].forEach(([x,y,z])=>{
+      const w = new THREE.Mesh(wheelGeo, wheelMat); w.position.set(x,y,z); carRoot.add(w);
+    });
+    toast('Set CYBERTRUCK_URL to a .glb to use your model.');
+  }
+})();
+
+/* ============ 4) Camera spring (nice “floaty” feel) ============ */
+// Critically-damped spring toward desired camera anchor behind the car
+const camVel = new THREE.Vector3();
+function springTo(current, target, velocity, dt, halflife=0.15){
+  // Exponential decay spring (stable): https://gafferongames.com/post/spring_physics/
+  const y = Math.exp(Math.log(0.5) * dt / halflife);
+  const j0 = current.clone().sub(target);
+  const j1 = velocity.clone().multiplyScalar(halflife * Math.log(0.5));
+  const c = j0.add(j1);
+  const newPos = target.clone().add(c.multiplyScalar(y).sub(j1.multiplyScalar(y)));
+  const newVel = velocity.clone().sub(c.multiplyScalar((Math.log(0.5)/halflife) * y));
+  return [newPos, newVel];
+}
+
+/* ============ 5) Driving + autopilot routes ============ */
+const keys = {};
+addEventListener('keydown', e=>{ keys[e.code]=true; autopilot.active=false; });
+addEventListener('keyup',   e=>{ keys[e.code]=false; });
+
+const DRIVE_FORCE = 2200;
+const MAX_SPEED = 28;
+const TURN = 2.2;
+const BRAKE = 0.8;
+
+function stepDriving(dt){
+  const fwdLocal = new CANNON.Vec3(0,0,-1);
+  const fwd = chassisBody.quaternion.vmult(fwdLocal);
+  const speed = chassisBody.velocity.length();
+
+  let throttle = 0;
+  if (keys['KeyW']||keys['ArrowUp']) throttle += 1;
+  if (keys['KeyS']||keys['ArrowDown']) throttle -= 0.8;
+
+  let steer = 0;
+  if (keys['KeyA']||keys['ArrowLeft'])  steer += 1;
+  if (keys['KeyD']||keys['ArrowRight']) steer -= 1;
+
+  if (throttle !== 0 && speed < MAX_SPEED){
+    chassisBody.applyForce(fwd.scale(DRIVE_FORCE * throttle), chassisBody.position);
+  }
+  if (speed > 0.6){
+    const sign = throttle >= 0 ? 1 : -1;
+    chassisBody.torque = chassisBody.torque.vadd(new CANNON.Vec3(0, TURN*sign*steer*1200, 0));
+  }
+  if (keys['Space']){
+    chassisBody.velocity.scale(1 - BRAKE*dt, chassisBody.velocity);
+    chassisBody.angularVelocity.scale(1 - BRAKE*dt, chassisBody.angularVelocity);
+  }
+  chassisBody.applyForce(new CANNON.Vec3(0, -500, 0), chassisBody.position); // downforce
+}
+
+/* --- Autopilot: follow waypoints (click map buttons) --- */
+const autopilot = {
+  active:false,
+  waypoints: [],
+  idx: 0
+};
+function setRoute(key){
+  // Simple routes: arc around the ring then in to the marker
+  const target = projects.find(p=>p.key===key);
+  if (!target) return;
+  const start = new THREE.Vector3(chassisBody.position.x,0,chassisBody.position.z);
+  const arcMid = start.clone().setLength(WORLD_RADIUS*0.7); // slide toward ring
+  const near = target.position.clone().setY(0).setLength(WORLD_RADIUS*0.7);
+  autopilot.waypoints = [arcMid, near, target.position.clone().setY(0)];
+  autopilot.idx = 0;
+  autopilot.active = true;
+  toast(`Auto route → ${target.label}. Press any key to cancel.`);
+}
+document.querySelectorAll('.btn[data-route]').forEach(b=>{
+  b.addEventListener('click', ()=> setRoute(b.dataset.route));
+});
+
+function stepAutopilot(dt){
+  if (!autopilot.active) return;
+  const wp = autopilot.waypoints[autopilot.idx];
+  if (!wp){ autopilot.active=false; return; }
+  const to = new CANNON.Vec3(wp.x - chassisBody.position.x, 0, wp.z - chassisBody.position.z);
+  const dist = Math.hypot(to.x, to.z);
+  if (dist < WAYPOINT_EPS){
+    autopilot.idx++;
+    if (autopilot.idx >= autopilot.waypoints.length){ autopilot.active=false; toast('Arrived.'); }
+    return;
+  }
+  // drive toward waypoint: steer by cross product sign
+  const forward = chassisBody.quaternion.vmult(new CANNON.Vec3(0,0,-1));
+  const dir = new CANNON.Vec3(to.x/dist, 0, to.z/dist);
+  const crossY = forward.x*dir.z - forward.z*dir.x;
+  // apply steering torque + throttle
+  chassisBody.torque = chassisBody.torque.vadd(new CANNON.Vec3(0, -crossY*1800, 0));
+  if (chassisBody.velocity.length() < MAX_SPEED*0.9){
+    chassisBody.applyForce(dir.scale(DRIVE_FORCE*0.9), chassisBody.position);
+  }
+}
+
+/* ============ 6) Interaction: click project to open ============ */
+const ray = new THREE.Raycaster(); const ndc = new THREE.Vector2();
+renderer.domElement.addEventListener('pointerdown', e=>{
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.x = ((e.clientX-r.left)/r.width)*2-1; ndc.y = -((e.clientY-r.top)/r.height)*2+1;
+  ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects(projectMeshes, true);
+  if (hits.length){
+    const p = hits[0].object.userData?.url || hits[0].object.parent?.userData?.url;
+    if (p) window.open(p, '_blank', 'noopener,noreferrer');
+  }
+});
+
+/* ============ 7) Minimap (2D canvas overlay) ============ */
+const minimap = document.getElementById('minimap');
+const mx = minimap.getContext('2d');
+function drawMinimap(){
+  const s = minimap.width, cx = s/2, cz = s/2, scale = (s*0.45)/WORLD_RADIUS;
+  mx.clearRect(0,0,s,s);
+  // ring
+  mx.strokeStyle='#1ea7ff44'; mx.lineWidth=2; mx.beginPath(); mx.arc(cx,cz, WORLD_RADIUS*scale, 0, Math.PI*2); mx.stroke();
+  // projects
+  projects.forEach(p=>{
+    const x = cx + p.position.x*scale, z = cz + p.position.z*scale;
+    mx.fillStyle = p.color; mx.globalAlpha = 0.9;
+    mx.beginPath(); mx.arc(x,z,5,0,Math.PI*2); mx.fill();
+  });
+  // car
+  const carX = cx + chassisBody.position.x*scale, carZ = cz + chassisBody.position.z*scale;
+  mx.fillStyle = '#e8f0ff'; mx.globalAlpha = 1;
+  mx.beginPath(); mx.arc(carX,carZ,4,0,Math.PI*2); mx.fill();
+}
+
+/* ============ 8) OrbitControls + chase cam target ============ */
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.07;
+controls.minDistance = 6; controls.maxDistance = 50;
+controls.target.set(0, 1.2, 0);
+
+function updateChaseCam(dt){
+  const carPos = new THREE.Vector3(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z);
+  // compute desired anchor: behind + above the car in its local -Z
+  const fwd = chassisBody.quaternion.vmult(new CANNON.Vec3(0,0,-1));
+  const desired = new THREE.Vector3(
+    carPos.x - fwd.x*7,
+    carPos.y + 3.5,
+    carPos.z - fwd.z*7
+  );
+  let newPos; [newPos, camVel.set(0,0,0)] = springTo(camera.position, desired, camVel, dt, 0.18);
+  camera.position.copy(newPos);
+  // spring target toward car
+  const targetDesired = new THREE.Vector3(carPos.x, carPos.y+1.2, carPos.z);
+  controls.target.lerp(targetDesired, 1 - Math.exp(-dt/0.12));
+  controls.update();
+}
+
+/* ============ 9) Loop ============ */
+let last = performance.now()/1000;
+function loop(){
+  requestAnimationFrame(loop);
+  const now = performance.now()/1000, dt = Math.min(now-last, 1/30); last = now;
+
+  if (!autopilot.active) stepDriving(dt); else stepAutopilot(dt);
+  world.step(1/60, dt, 3);
+
+  // Sync visuals to physics
+  carRoot.position.copy(chassisBody.position);
+  carRoot.quaternion.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w);
+
+  updateChaseCam(dt);
+  renderer.render(scene, camera);
+  drawMinimap();
+}
+loop();
+
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ============ helpers ============ */
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.style.display='block';
+  clearTimeout(toast._t); toast._t = setTimeout(()=>{ el.style.display='none'; }, 2500);
+}
+</script>
+</body>
+</html>
