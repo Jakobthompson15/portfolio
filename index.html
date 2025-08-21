@@ -3,23 +3,37 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>3D Portfolio — Cybertruck + UI Map</title>
+<title>3D Portfolio — Cybertruck · Monochrome</title>
 <style>
-  html,body{height:100%;margin:0;background:#0b0d10;color:#e8f0ff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial}
+  :root{
+    --bg:#0a0a0a; --card:#0e0e0e; --ink:#eaeaea; --ink-2:#bdbdbd; --line:#151515; --accent:#ffffff;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial}
   #app{position:fixed;inset:0}
-  .hud{position:fixed;left:12px;top:12px;z-index:10;background:rgba(12,16,22,.55);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.35}
-  .hud b{font-weight:700}
+  .hud{position:fixed;left:12px;top:12px;z-index:10;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.35;backdrop-filter:blur(8px)}
+  .hud b{font-weight:700;color:var(--ink)}
   .ui-map{position:fixed;right:12px;bottom:12px;z-index:12;display:grid;grid-template-columns:auto;gap:8px}
-  .map-card{background:rgba(12,16,22,.55);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px}
-  .map-title{font-size:12px;opacity:.8;margin-bottom:6px}
-  canvas#minimap{display:block;width:200px;height:200px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#0a0d12}
+  .map-card{background:rgba(0,0,0,.55);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px}
+  .map-title{font-size:12px;color:var(--ink-2);margin-bottom:6px;letter-spacing:.08em;text-transform:uppercase}
+  canvas#minimap{display:block;width:200px;height:200px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#000}
   .map-buttons{display:flex;gap:8px}
-  .btn{appearance:none;border:1px solid rgba(255,255,255,.15);background:transparent;border-radius:999px;padding:6px 10px;color:#e8f0ff;font-size:12px;cursor:pointer}
-  .btn:hover{border-color:#4cc9ff}
-  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;background:rgba(12,16,22,.85);border:1px solid rgba(255,255,255,.1);padding:8px 12px;border-radius:999px;font-size:12px;z-index:20;opacity:.9}
+  .btn{appearance:none;border:1px solid rgba(255,255,255,.15);background:transparent;border-radius:999px;padding:6px 10px;color:var(--ink);font-size:12px;cursor:pointer}
+  .btn:hover{border-color:var(--accent)}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;background:rgba(0,0,0,.85);border:1px solid rgba(255,255,255,.1);padding:8px 12px;border-radius:999px;font-size:12px;z-index:20;opacity:.9}
+  .badge{position:fixed;right:12px;top:12px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.08);border-radius:999px;padding:6px 10px;font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+  /* vignette */
+  .vignette{pointer-events:none;position:fixed;inset:0;background:radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,.55) 100%);}
+  /* mobile controls */
+  @media (max-width: 900px){
+    .hud{font-size:11px}
+    .stick{position:fixed;left:16px;bottom:16px;width:120px;height:120px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);touch-action:none}
+    .stick .knob{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:54px;height:54px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)}
+    .pedals{position:fixed;right:16px;bottom:16px;display:flex;gap:10px}
+    .pedals .p{width:70px;height:70px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);display:grid;place-items:center;font-size:12px}
+  }
 </style>
 
-<!-- Import maps: Three, loaders, and cannon-es -->
+<!-- Import maps: three, loaders, postprocessing, and cannon-es -->
 <script type="importmap">
 {
   "imports": {
@@ -34,9 +48,10 @@
   <div id="app"></div>
 
   <div class="hud">
-    <div><b>Drive:</b> WASD / Arrows • <b>Brake:</b> Space • <b>Camera:</b> drag</div>
+    <div><b>Drive:</b> WASD / Arrows • <b>Brake:</b> Space • <b>Camera:</b> drag • <b>Reset:</b> R</div>
     <div>Click a route in the map to auto‑drive. Press any key to cancel.</div>
   </div>
+  <div class="badge">Monochrome</div>
 
   <!-- UI Map -->
   <div class="ui-map">
@@ -52,78 +67,130 @@
   </div>
 
   <div id="toast" class="toast" style="display:none"></div>
+  <div class="vignette"></div>
+
+  <!-- Mobile controls (appear via JS on small screens) -->
+  <div id="mobileUI" style="display:none">
+    <div class="stick" id="stick"><div class="knob"></div></div>
+    <div class="pedals"><div class="p" id="go">GO</div><div class="p" id="brake">BRK</div></div>
+  </div>
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import * as CANNON from 'cannon-es';
 
 /* ============ 0) Config ============ */
-const CYBERTRUCK_URL = 'YOUR_CYBERTRUCK_MODEL.glb'; // <-- drop a .glb URL or file path here
-const WORLD_RADIUS = 42; // meters
-const WAYPOINT_EPS = 2.2;
+const CYBERTRUCK_URL = 'https://raw.githubusercontent.com/Jakobthompson15/portfolio/cc7d23138307bd9a1a0b5c896e3d604ac77a680d/Tesla%20Cybertruck.glb';
+const WORLD_RADIUS = 46; // meters
+const WAYPOINT_EPS = 2.1;
+const MONO = true; // enforce black & white look
 
 const projects = [
-  { key:'portfolio', label:'Portfolio', color:'#5ee1ff', position:new THREE.Vector3( 24,0, 18), url:'https://example.com/portfolio' },
-  { key:'info',      label:'Info',      color:'#ffd166', position:new THREE.Vector3(-26,0,-10), url:'https://example.com/info' },
-  { key:'contact',   label:'Contact',   color:'#a0ff8f', position:new THREE.Vector3(  6,0,-28), url:'https://example.com/contact' },
+  { key:'portfolio', label:'Portfolio', color:'#ffffff', position:new THREE.Vector3( 28,0, 16), url:'https://example.com/portfolio' },
+  { key:'info',      label:'Info',      color:'#cfcfcf', position:new THREE.Vector3(-30,0, -6), url:'https://example.com/info' },
+  { key:'contact',   label:'Contact',   color:'#9a9a9a', position:new THREE.Vector3(  4,0,-30), url:'https://example.com/contact' },
 ];
 
 /* ============ 1) Three.js Scene ============ */
 const container = document.getElementById('app');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0d10);
+scene.background = new THREE.Color(0x0a0a0a);
+scene.fog = new THREE.FogExp2(0x0a0a0a, 0.03);
 
-const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 600);
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 800);
 camera.position.set(0, 6, 14);
 
-const renderer = new THREE.WebGLRenderer({ antialias:true });
+const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
 container.appendChild(renderer.domElement);
 
-const hemi = new THREE.HemisphereLight(0xcfe9ff, 0x101319, 0.85);
+// Post-processing (subtle bloom for highlights like ring & labels)
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.25, 0.85, 0.85);
+composer.addPass(bloom);
+
+// Lighting (monochrome)
+const hemi = new THREE.HemisphereLight(0xffffff, 0x0a0a0a, 0.7);
 scene.add(hemi);
-const dir = new THREE.DirectionalLight(0xffffff, 1.2);
-dir.position.set(12,16,10);
+const dir = new THREE.DirectionalLight(0xffffff, 1.35);
+dir.position.set(12,18,10);
 scene.add(dir);
 
-// Ground disc + ring
+// Ground disc + ring (white on black)
 const ground = new THREE.Mesh(
-  new THREE.CircleGeometry(WORLD_RADIUS, 128),
-  new THREE.MeshStandardMaterial({ color: 0x0f141a, roughness:1 })
+  new THREE.CircleGeometry(WORLD_RADIUS, 160),
+  new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness:1 })
 );
 ground.rotation.x = -Math.PI/2;
 scene.add(ground);
 
-scene.add(new THREE.Mesh(
-  new THREE.TorusGeometry(WORLD_RADIUS-1.2, 0.08, 8, 180),
-  new THREE.MeshBasicMaterial({ color: 0x1ea7ff, transparent:true, opacity:.25 })
-)).rotation.x = Math.PI/2;
+const ring = new THREE.Mesh(
+  new THREE.TorusGeometry(WORLD_RADIUS-1.2, 0.09, 8, 200),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent:true, opacity:.18 })
+);
+ring.rotation.x = Math.PI/2; scene.add(ring);
 
-// Props: project totems
+// Dashes on ring (track vibe)
+for(let i=0;i<36;i++){
+  const seg = new THREE.Mesh(
+    new THREE.BoxGeometry(1.6, 0.04, 0.12),
+    new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:.35 })
+  );
+  const a = (i/36)*Math.PI*2; seg.position.set(Math.cos(a)*(WORLD_RADIUS-1.2), 0.02, Math.sin(a)*(WORLD_RADIUS-1.2));
+  seg.rotation.y = -a; scene.add(seg);
+}
+
+// Low poly props: cones & blocks (monochrome)
+const propMatLight = new THREE.MeshStandardMaterial({ color:0xdddddd, metalness:0.1, roughness:0.9 });
+const propMatDark  = new THREE.MeshStandardMaterial({ color:0x111111, metalness:0.1, roughness:0.9 });
+const props = new THREE.Group(); scene.add(props);
+
+function addBlock(x,z,w=2,h=0.6,d=2,light=true){
+  const m = light?propMatLight:propMatDark;
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), m);
+  mesh.position.set(x,h/2,z); props.add(mesh); return mesh;
+}
+function addCone(x,z,r=0.35,h=0.8){
+  const geo = new THREE.ConeGeometry(r,h,12);
+  const m = new THREE.MeshStandardMaterial({ color:0xcccccc, roughness:0.6, metalness:0.0 });
+  const cone = new THREE.Mesh(geo, m); cone.position.set(x,h/2,z); props.add(cone); return cone;
+}
+for(let i=0;i<10;i++){
+  const a = (i/10)*Math.PI*2; const R = WORLD_RADIUS-6;
+  addCone(Math.cos(a)*R, Math.sin(a)*R);
+}
+addBlock(10,-8,6,0.6,1.6,true);
+addBlock(-12,12,3,0.6,8,false);
+
+// Project totems
 const projectMeshes = [];
 projects.forEach(p => {
-  const g = new THREE.CylinderGeometry(0.9, 0.9, 2.2, 20);
-  const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(p.color) });
+  const g = new THREE.CylinderGeometry(0.9, 0.9, 2.2, 24);
+  const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(p.color), metalness:0.1, roughness:0.8 });
   const mesh = new THREE.Mesh(g, m);
   mesh.position.copy(p.position).setY(1.1);
   mesh.userData = p;
-  // glow
+  // glow sleeve (subtle)
   const glow = new THREE.Mesh(
     new THREE.CylinderGeometry(1.05,1.05,2.25,24),
     new THREE.MeshBasicMaterial({ color: new THREE.Color(p.color), transparent:true, opacity:.12 })
   );
   mesh.add(glow);
-  // label
+  // label (monochrome sprite)
   const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeLabelTexture(p.label) }));
   label.position.set(0, 1.8, 0);
-  label.scale.set(2.8, 0.8, 1);
+  label.scale.set(2.6, 0.72, 1);
   mesh.add(label);
-
   scene.add(mesh);
   projectMeshes.push(mesh);
 });
@@ -131,9 +198,9 @@ projects.forEach(p => {
 function makeLabelTexture(text){
   const c = document.createElement('canvas'); c.width=512; c.height=128;
   const x = c.getContext('2d');
-  x.fillStyle='#0f141a'; x.fillRect(0,0,c.width,c.height);
+  x.fillStyle='#0a0a0a'; x.fillRect(0,0,c.width,c.height);
   x.strokeStyle='#ffffff22'; x.strokeRect(0,0,c.width,c.height);
-  x.fillStyle='#e8f0ff'; x.font='600 40px Inter, Arial'; x.textAlign='center'; x.textBaseline='middle';
+  x.fillStyle='#ffffff'; x.font='600 40px Inter, Arial'; x.textAlign='center'; x.textBaseline='middle';
   x.fillText(text, c.width/2, c.height/2);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
@@ -143,35 +210,32 @@ const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
 world.broadphase = new CANNON.SAPBroadphase(world);
 world.allowSleep = true;
 
-const groundBody = new CANNON.Body({ mass:0, shape:new CANNON.Plane(), material:new CANNON.Material({ friction:0.8, restitution:0.05 }) });
+const groundBody = new CANNON.Body({ mass:0, shape:new CANNON.Plane(), material:new CANNON.Material({ friction:0.9, restitution:0.02 }) });
 groundBody.quaternion.setFromEuler(-Math.PI/2, 0, 0);
 world.addBody(groundBody);
 
-/* ============ 3) Car: Cybertruck (GLB, black) w/ fallback box ============ */
+/* ============ 3) Car: Cybertruck (GLB) with fallback ============ */
 const carRoot = new THREE.Group(); scene.add(carRoot);
 const chassisBody = new CANNON.Body({
-  mass: 400,
-  shape: new CANNON.Box(new CANNON.Vec3(1,0.5,2)),
+  mass: 450,
+  shape: new CANNON.Box(new CANNON.Vec3(1.0,0.45,2.1)),
   position: new CANNON.Vec3(0, 1.2, 0),
-  linearDamping: 0.15, angularDamping: 0.5
+  linearDamping: 0.12, angularDamping: 0.6
 });
 world.addBody(chassisBody);
 
-// try to load cybertruck; fallback to box if it fails
 (async ()=>{
   try{
-    if (!CYBERTRUCK_URL || CYBERTRUCK_URL.startsWith('YOUR_')) throw new Error('no model set');
     const gltf = await new GLTFLoader().loadAsync(CYBERTRUCK_URL);
     const model = gltf.scene;
-    // scale/center and make it black graphite
-    model.scale.setScalar(1.4);
+    model.scale.setScalar(1.35);
     model.traverse(o=>{
       if (o.isMesh) {
         if (o.material) {
           o.material = o.material.clone();
-          o.material.color = new THREE.Color(0x0d0f13); // dark
-          o.material.metalness = 0.6;
-          o.material.roughness = 0.35;
+          o.material.color = new THREE.Color(0x111111);
+          o.material.metalness = 0.65;
+          o.material.roughness = 0.32;
         }
         o.castShadow = o.receiveShadow = false;
       }
@@ -179,28 +243,23 @@ world.addBody(chassisBody);
     model.position.y = 0.6;
     carRoot.add(model);
   }catch(e){
-    // fallback visual shell
     const bodyMesh = new THREE.Mesh(
       new THREE.BoxGeometry(2.2, 0.9, 4.2),
-      new THREE.MeshStandardMaterial({ color: 0x0d0f13, metalness:.5, roughness:.35 })
+      new THREE.MeshStandardMaterial({ color: 0x111111, metalness:.5, roughness:.35 })
     );
-    bodyMesh.position.y = 0.9;
-    carRoot.add(bodyMesh);
-    // wheels (visual)
+    bodyMesh.position.y = 0.9; carRoot.add(bodyMesh);
     const wheelGeo = new THREE.CylinderGeometry(0.6,0.6,0.4,22); wheelGeo.rotateZ(Math.PI/2);
-    const wheelMat = new THREE.MeshStandardMaterial({ color:0x161b22 });
+    const wheelMat = new THREE.MeshStandardMaterial({ color:0x1a1a1a });
     [[ 1.0,0.5, 1.5],[-1.0,0.5, 1.5],[ 1.0,0.5,-1.5],[-1.0,0.5,-1.5]].forEach(([x,y,z])=>{
       const w = new THREE.Mesh(wheelGeo, wheelMat); w.position.set(x,y,z); carRoot.add(w);
     });
-    toast('Set CYBERTRUCK_URL to a .glb to use your model.');
+    toast('Could not load GLB (check CORS). Showing fallback box.');
   }
 })();
 
-/* ============ 4) Camera spring (nice “floaty” feel) ============ */
-// Critically-damped spring toward desired camera anchor behind the car
+/* ============ 4) Camera spring & mild shake ============ */
 const camVel = new THREE.Vector3();
 function springTo(current, target, velocity, dt, halflife=0.15){
-  // Exponential decay spring (stable): https://gafferongames.com/post/spring_physics/
   const y = Math.exp(Math.log(0.5) * dt / halflife);
   const j0 = current.clone().sub(target);
   const j1 = velocity.clone().multiplyScalar(halflife * Math.log(0.5));
@@ -215,10 +274,25 @@ const keys = {};
 addEventListener('keydown', e=>{ keys[e.code]=true; autopilot.active=false; });
 addEventListener('keyup',   e=>{ keys[e.code]=false; });
 
-const DRIVE_FORCE = 2200;
-const MAX_SPEED = 28;
-const TURN = 2.2;
-const BRAKE = 0.8;
+const DRIVE_FORCE = 2400;
+const MAX_SPEED = 29;
+const TURN = 2.6;
+const BRAKE = 0.85;
+
+// simple skid marks buffer (Bruno-esque detail)
+const skidGeo = new THREE.BufferGeometry();
+const skidMax = 4000; // pairs of points
+const skidPos = new Float32Array(skidMax*3);
+let skidIdx = 0;
+const skidMat = new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.18 });
+const skid = new THREE.LineSegments(skidGeo, skidMat); scene.add(skid);
+
+function addSkid(a,b){
+  skidPos[(skidIdx% (skidMax*3))] = a.x; skidPos[(skidIdx% (skidMax*3))+1] = 0.01; skidPos[(skidIdx% (skidMax*3))+2] = a.z; skidIdx+=3;
+  skidPos[(skidIdx% (skidMax*3))] = b.x; skidPos[(skidIdx% (skidMax*3))+1] = 0.01; skidPos[(skidIdx% (skidMax*3))+2] = b.z; skidIdx+=3;
+  skidGeo.setAttribute('position', new THREE.BufferAttribute(skidPos, 3));
+  skidGeo.computeBoundingSphere();
+}
 
 function stepDriving(dt){
   const fwdLocal = new CANNON.Vec3(0,0,-1);
@@ -244,25 +318,28 @@ function stepDriving(dt){
     chassisBody.velocity.scale(1 - BRAKE*dt, chassisBody.velocity);
     chassisBody.angularVelocity.scale(1 - BRAKE*dt, chassisBody.angularVelocity);
   }
-  chassisBody.applyForce(new CANNON.Vec3(0, -500, 0), chassisBody.position); // downforce
+  // downforce & slight drag
+  chassisBody.applyForce(new CANNON.Vec3(0, -520, 0), chassisBody.position);
+  const drag = chassisBody.velocity.scale(0.02);
+  chassisBody.applyForce(drag.scale(-120), chassisBody.position);
+
+  // make skids when braking or hard turning
+  if (keys['Space'] || Math.abs(steer)>0.7){
+    const p = new THREE.Vector3(chassisBody.position.x,0,chassisBody.position.z);
+    addSkid(p.clone().add(new THREE.Vector3(0.7,0,1.1)), p.clone().add(new THREE.Vector3(-0.7,0,-1.1)));
+  }
 }
 
 /* --- Autopilot: follow waypoints (click map buttons) --- */
-const autopilot = {
-  active:false,
-  waypoints: [],
-  idx: 0
-};
+const autopilot = { active:false, waypoints: [], idx: 0 };
 function setRoute(key){
-  // Simple routes: arc around the ring then in to the marker
   const target = projects.find(p=>p.key===key);
   if (!target) return;
   const start = new THREE.Vector3(chassisBody.position.x,0,chassisBody.position.z);
-  const arcMid = start.clone().setLength(WORLD_RADIUS*0.7); // slide toward ring
-  const near = target.position.clone().setY(0).setLength(WORLD_RADIUS*0.7);
+  const arcMid = start.clone().setLength(WORLD_RADIUS*0.72);
+  const near = target.position.clone().setY(0).setLength(WORLD_RADIUS*0.72);
   autopilot.waypoints = [arcMid, near, target.position.clone().setY(0)];
-  autopilot.idx = 0;
-  autopilot.active = true;
+  autopilot.idx = 0; autopilot.active = true;
   toast(`Auto route → ${target.label}. Press any key to cancel.`);
 }
 document.querySelectorAll('.btn[data-route]').forEach(b=>{
@@ -280,14 +357,12 @@ function stepAutopilot(dt){
     if (autopilot.idx >= autopilot.waypoints.length){ autopilot.active=false; toast('Arrived.'); }
     return;
   }
-  // drive toward waypoint: steer by cross product sign
   const forward = chassisBody.quaternion.vmult(new CANNON.Vec3(0,0,-1));
   const dir = new CANNON.Vec3(to.x/dist, 0, to.z/dist);
   const crossY = forward.x*dir.z - forward.z*dir.x;
-  // apply steering torque + throttle
-  chassisBody.torque = chassisBody.torque.vadd(new CANNON.Vec3(0, -crossY*1800, 0));
+  chassisBody.torque = chassisBody.torque.vadd(new CANNON.Vec3(0, -crossY*1900, 0));
   if (chassisBody.velocity.length() < MAX_SPEED*0.9){
-    chassisBody.applyForce(dir.scale(DRIVE_FORCE*0.9), chassisBody.position);
+    chassisBody.applyForce(dir.scale(DRIVE_FORCE*0.92), chassisBody.position);
   }
 }
 
@@ -310,18 +385,14 @@ const mx = minimap.getContext('2d');
 function drawMinimap(){
   const s = minimap.width, cx = s/2, cz = s/2, scale = (s*0.45)/WORLD_RADIUS;
   mx.clearRect(0,0,s,s);
-  // ring
-  mx.strokeStyle='#1ea7ff44'; mx.lineWidth=2; mx.beginPath(); mx.arc(cx,cz, WORLD_RADIUS*scale, 0, Math.PI*2); mx.stroke();
-  // projects
+  mx.strokeStyle='#ffffff33'; mx.lineWidth=2; mx.beginPath(); mx.arc(cx,cz, WORLD_RADIUS*scale, 0, Math.PI*2); mx.stroke();
   projects.forEach(p=>{
     const x = cx + p.position.x*scale, z = cz + p.position.z*scale;
-    mx.fillStyle = p.color; mx.globalAlpha = 0.9;
+    mx.fillStyle = '#ffffff'; mx.globalAlpha = 0.9;
     mx.beginPath(); mx.arc(x,z,5,0,Math.PI*2); mx.fill();
   });
-  // car
   const carX = cx + chassisBody.position.x*scale, carZ = cz + chassisBody.position.z*scale;
-  mx.fillStyle = '#e8f0ff'; mx.globalAlpha = 1;
-  mx.beginPath(); mx.arc(carX,carZ,4,0,Math.PI*2); mx.fill();
+  mx.fillStyle = '#ffffff'; mx.globalAlpha = 1; mx.beginPath(); mx.arc(carX,carZ,4,0,Math.PI*2); mx.fill();
 }
 
 /* ============ 8) OrbitControls + chase cam target ============ */
@@ -332,27 +403,66 @@ controls.target.set(0, 1.2, 0);
 
 function updateChaseCam(dt){
   const carPos = new THREE.Vector3(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z);
-  // compute desired anchor: behind + above the car in its local -Z
   const fwd = chassisBody.quaternion.vmult(new CANNON.Vec3(0,0,-1));
   const desired = new THREE.Vector3(
     carPos.x - fwd.x*7,
-    carPos.y + 3.5,
+    carPos.y + 3.6,
     carPos.z - fwd.z*7
   );
   let newPos; [newPos, camVel.set(0,0,0)] = springTo(camera.position, desired, camVel, dt, 0.18);
+  // mild shake based on speed
+  const shake = Math.min(chassisBody.velocity.length()/MAX_SPEED, 1)*0.03;
+  newPos.x += (Math.random()-0.5)*shake; newPos.y += (Math.random()-0.5)*shake; newPos.z += (Math.random()-0.5)*shake;
   camera.position.copy(newPos);
-  // spring target toward car
   const targetDesired = new THREE.Vector3(carPos.x, carPos.y+1.2, carPos.z);
   controls.target.lerp(targetDesired, 1 - Math.exp(-dt/0.12));
   controls.update();
 }
 
-/* ============ 9) Loop ============ */
+/* ============ 9) Mobile controls ============ */
+const mobileUI = document.getElementById('mobileUI');
+let isMobile = matchMedia('(max-width: 900px)').matches;
+if (isMobile){ mobileUI.style.display='block'; }
+let joy = {x:0,y:0,active:false};
+function bindJoystick(){
+  const stick = document.getElementById('stick');
+  if (!stick) return;
+  const knob = stick.querySelector('.knob');
+  const center = ()=>{ knob.style.left='50%'; knob.style.top='50%'; };
+  center();
+  const onMove = (clientX, clientY)=>{
+    const r = stick.getBoundingClientRect();
+    const dx = clientX - (r.left + r.width/2);
+    const dy = clientY - (r.top + r.height/2);
+    const maxR = r.width/2 - 10; const len = Math.hypot(dx,dy); const cl = Math.min(1, len/maxR);
+    const nx = (dx/len||0)*cl, ny = (dy/len||0)*cl;
+    knob.style.left = (50 + nx*40)+'%'; knob.style.top = (50 + ny*40)+'%';
+    joy.x = nx; joy.y = ny; joy.active = true;
+  };
+  stick.addEventListener('touchstart', e=>{ onMove(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
+  stick.addEventListener('touchmove',  e=>{ onMove(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
+  stick.addEventListener('touchend',   ()=>{ joy={x:0,y:0,active:false}; center(); });
+  document.getElementById('go')?.addEventListener('touchstart', ()=> keys['KeyW']=true, {passive:true});
+  document.getElementById('go')?.addEventListener('touchend', ()=> keys['KeyW']=false, {passive:true});
+  document.getElementById('brake')?.addEventListener('touchstart', ()=> keys['Space']=true, {passive:true});
+  document.getElementById('brake')?.addEventListener('touchend', ()=> keys['Space']=false, {passive:true});
+}
+bindJoystick();
+
+function applyMobileInput(){
+  if (!joy.active) return;
+  // map joystick to A/D + W/S
+  keys['KeyA'] = joy.x < -0.2; keys['KeyD'] = joy.x > 0.2;
+  keys['KeyW'] = joy.y < -0.2; keys['KeyS'] = joy.y > 0.2;
+}
+
+/* ============ 10) Loop ============ */
 let last = performance.now()/1000;
 function loop(){
   requestAnimationFrame(loop);
   const now = performance.now()/1000, dt = Math.min(now-last, 1/30); last = now;
 
+  applyMobileInput();
   if (!autopilot.active) stepDriving(dt); else stepAutopilot(dt);
   world.step(1/60, dt, 3);
 
@@ -361,7 +471,8 @@ function loop(){
   carRoot.quaternion.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w);
 
   updateChaseCam(dt);
-  renderer.render(scene, camera);
+  // renderer.render(scene, camera);
+  composer.render();
   drawMinimap();
 }
 loop();
@@ -369,6 +480,14 @@ loop();
 addEventListener('resize', ()=>{
   camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+addEventListener('keydown', (e)=>{
+  if (e.code==='KeyR'){
+    chassisBody.velocity.set(0,0,0); chassisBody.angularVelocity.set(0,0,0);
+    chassisBody.position.set(0,1.2,0); chassisBody.quaternion.set(0,0,0,1);
+  }
 });
 
 /* ============ helpers ============ */
